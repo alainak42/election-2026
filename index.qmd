@@ -1,0 +1,118 @@
+---
+title: "North Carolina General Elections (2016–2026)"
+subtitle: "Statewide Top-of-Ticket Results and Voting Methods from NCSBE Data"
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r}
+library(tidyverse)
+library(scales)
+library(knitr)
+
+# Read all six zipped NCSBE files and standardize 2016-2022's "One Stop" column name
+zip_files <- sort(list.files("data", pattern = "\\.zip$", full.names = TRUE))
+
+nc_results <- map(zip_files, \(f) {
+  read_tsv(f, show_col_types = FALSE, name_repair = "unique_quiet") |>
+    rename(any_of(c("Early Voting" = "One Stop"))) |>
+    select(!starts_with("..."))
+}) |>
+  list_rbind() |>
+  mutate(Year = year(mdy(`Election Date`)))
+
+# Pick the highest-turnout partisan statewide contest in each election year
+top_contests <- tribble(
+  ~Year, ~`Contest Name`,                             ~Race_Label,
+  2016,  "US PRESIDENT",                              "2016 President",
+  2018,  "NC SUPREME COURT ASSOCIATE JUSTICE SEAT 1", "2018 NC Supreme Ct",
+  2020,  "US PRESIDENT",                              "2020 President",
+  2022,  "US SENATE",                                 "2022 US Senate",
+  2024,  "US PRESIDENT",                              "2024 President",
+  2026,  "US SENATE",                                 "2026 US Senate"
+)
+
+top_races <- nc_results |>
+  inner_join(top_contests, by = c("Year", "Contest Name"))
+```
+
+## How North Carolinians Cast Their Ballots (2016–2026)
+
+Data come from the [NC State Board of Elections historical precinct results](https://www.ncsbe.gov/results-data/election-results/historical-election-results-data). Using the highest-turnout partisan statewide race in each November general election, we can compare total turnout and voting methods over the past decade.
+
+```{r}
+#| fig-width: 8
+#| fig-height: 4.8
+
+method_totals <- top_races |>
+  summarize(
+    `Early Voting` = sum(`Early Voting`, na.rm = TRUE),
+    `Election Day` = sum(`Election Day`, na.rm = TRUE),
+    `Absentee by Mail` = sum(`Absentee by Mail`, na.rm = TRUE),
+    Provisional = sum(Provisional, na.rm = TRUE),
+    .by = c(Year, Race_Label)
+  ) |>
+  pivot_longer(
+    cols = c(`Early Voting`, `Election Day`, `Absentee by Mail`, Provisional),
+    names_to = "Method",
+    values_to = "Votes"
+  ) |>
+  mutate(
+    Method = fct_relevel(Method, "Provisional", "Absentee by Mail", "Election Day", "Early Voting")
+  )
+
+ggplot(method_totals, aes(x = factor(Year), y = Votes, fill = Method)) +
+  geom_col(width = 0.65) +
+  scale_y_continuous(labels = label_number(scale = 1e-6, suffix = "M")) +
+  scale_fill_brewer(palette = "Set2", guide = guide_legend(reverse = TRUE)) +
+  labs(
+    title = "Early Voting Consistently Leads North Carolina General Election Turnout",
+    subtitle = "Ballots cast in the top statewide partisan contest, 2016–2026",
+    x = "Election Year",
+    y = "Votes Cast (Millions)",
+    fill = "Voting Method",
+    caption = "Source: NC State Board of Elections (NCSBE)"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+## Top-of-Ticket Statewide Results by Party
+
+```{r}
+party_summary <- top_races |>
+  summarize(
+    Total_Contest_Votes = sum(`Total Votes`, na.rm = TRUE),
+    DEM_Votes = sum(`Total Votes`[`Choice Party` == "DEM"], na.rm = TRUE),
+    REP_Votes = sum(`Total Votes`[`Choice Party` == "REP"], na.rm = TRUE),
+    .by = c(Year, Race_Label)
+  )
+
+winners <- top_races |>
+  summarize(Votes = sum(`Total Votes`, na.rm = TRUE), .by = c(Year, Choice, `Choice Party`)) |>
+  slice_max(Votes, n = 1, by = Year) |>
+  mutate(Winner = paste0(Choice, " (", `Choice Party`, ")")) |>
+  select(Year, Winner)
+
+party_summary |>
+  left_join(winners, by = "Year") |>
+  arrange(desc(Year)) |>
+  mutate(
+    `DEM %` = percent(DEM_Votes / Total_Contest_Votes, accuracy = 0.1),
+    `REP %` = percent(REP_Votes / Total_Contest_Votes, accuracy = 0.1),
+    `DEM Votes` = comma(DEM_Votes),
+    `REP Votes` = comma(REP_Votes),
+    `Total Votes` = comma(Total_Contest_Votes)
+  ) |>
+  select(
+    Contest = Race_Label,
+    Winner,
+    `DEM Votes`,
+    `DEM %`,
+    `REP Votes`,
+    `REP %`,
+    `Total Votes`
+  ) |>
+  kable()
+```
